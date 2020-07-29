@@ -24,6 +24,7 @@ set(pulseview_TEST_SOURCES
 	${PROJECT_SOURCE_DIR}/pv/globalsettings.cpp
 	${PROJECT_SOURCE_DIR}/pv/logging.cpp
 	${PROJECT_SOURCE_DIR}/pv/mainwindow.cpp
+	${PROJECT_SOURCE_DIR}/pv/metadata_obj.cpp
 	${PROJECT_SOURCE_DIR}/pv/session.cpp
 	${PROJECT_SOURCE_DIR}/pv/storesession.cpp
 	${PROJECT_SOURCE_DIR}/pv/util.cpp
@@ -107,6 +108,7 @@ set(pulseview_TEST_HEADERS
 	${PROJECT_SOURCE_DIR}/pv/globalsettings.hpp
 	${PROJECT_SOURCE_DIR}/pv/logging.hpp
 	${PROJECT_SOURCE_DIR}/pv/mainwindow.hpp
+	${PROJECT_SOURCE_DIR}/pv/metadata_obj.hpp
 	${PROJECT_SOURCE_DIR}/pv/session.hpp
 	${PROJECT_SOURCE_DIR}/pv/storesession.hpp
 	${PROJECT_SOURCE_DIR}/pv/binding/device.hpp
@@ -176,6 +178,8 @@ if(ENABLE_DECODE)
 		${PROJECT_SOURCE_DIR}/pv/subwindows/decoder_selector/subwindow.cpp
 		${PROJECT_SOURCE_DIR}/pv/views/decoder_binary/view.cpp
 		${PROJECT_SOURCE_DIR}/pv/views/decoder_binary/QHexView.cpp
+		${PROJECT_SOURCE_DIR}/pv/views/tabular_decoder/model.cpp
+		${PROJECT_SOURCE_DIR}/pv/views/tabular_decoder/view.cpp
 		${PROJECT_SOURCE_DIR}/pv/views/trace/decodetrace.cpp
 		${PROJECT_SOURCE_DIR}/pv/widgets/decodergroupbox.cpp
 		${PROJECT_SOURCE_DIR}/pv/widgets/decodermenu.cpp
@@ -186,6 +190,7 @@ if(ENABLE_DECODE)
 		${PROJECT_SOURCE_DIR}/pv/subwindows/decoder_selector/subwindow.hpp
 		${PROJECT_SOURCE_DIR}/pv/views/decoder_binary/view.hpp
 		${PROJECT_SOURCE_DIR}/pv/views/decoder_binary/QHexView.hpp
+		${PROJECT_SOURCE_DIR}/pv/views/tabular_decoder/view.hpp
 		${PROJECT_SOURCE_DIR}/pv/views/trace/decodetrace.hpp
 		${PROJECT_SOURCE_DIR}/pv/widgets/decodergroupbox.hpp
 		${PROJECT_SOURCE_DIR}/pv/widgets/decodermenu.hpp

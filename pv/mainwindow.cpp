@@ -53,6 +53,7 @@
 #ifdef ENABLE_DECODE
 #include "subwindows/decoder_selector/subwindow.hpp"
 #include "views/decoder_binary/view.hpp"
+#include "views/tabular_decoder/view.hpp"
 #endif
 
 #include <libsigrokcxx/libsigrokcxx.hpp>
@@ -164,6 +165,8 @@ shared_ptr<views::ViewBase> MainWindow::add_view(views::ViewType type,
 #ifdef ENABLE_DECODE
 	if (type == views::ViewTypeDecoderBinary)
 		v = make_shared<views::decoder_binary::View>(session, false, dock_main);
+	if (type == views::ViewTypeTabularDecoder)
+		v = make_shared<views::tabular_decoder::View>(session, false, dock_main);
 #endif
 
 	if (!v)
@@ -330,8 +333,8 @@ shared_ptr<Session> MainWindow::add_session()
 
 	shared_ptr<Session> session = make_shared<Session>(device_manager_, name);
 
-	connect(session.get(), SIGNAL(add_view(views::ViewType, Session*)),
-		this, SLOT(on_add_view(views::ViewType, Session*)));
+	connect(session.get(), SIGNAL(add_view(ViewType, Session*)),
+		this, SLOT(on_add_view(ViewType, Session*)));
 	connect(session.get(), SIGNAL(name_changed()),
 		this, SLOT(on_session_name_changed()));
 	connect(session.get(), SIGNAL(device_changed()),
@@ -878,6 +881,8 @@ void MainWindow::on_show_decoder_selector(Session *session)
 	for (shared_ptr<Session>& s : sessions_)
 		if (s.get() == session)
 			add_subwindow(subwindows::SubWindowTypeDecoderSelector, *s);
+#else
+	(void)session;
 #endif
 }
 

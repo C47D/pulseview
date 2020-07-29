@@ -45,15 +45,62 @@ const int SignalBase::ColorBGAlpha = 8 * 256 / 100;
 const uint64_t SignalBase::ConversionBlockSize = 4096;
 const uint32_t SignalBase::ConversionDelay = 1000;  // 1 second
 
+
+SignalGroup::SignalGroup(const QString& name)
+{
+	name_ = name;
+}
+
+void SignalGroup::append_signal(shared_ptr<SignalBase> signal)
+{
+	if (!signal)
+		return;
+
+	signals_.push_back(signal);
+	signal->set_group(this);
+}
+
+void SignalGroup::remove_signal(shared_ptr<SignalBase> signal)
+{
+	if (!signal)
+		return;
+
+	signals_.erase(std::remove_if(signals_.begin(), signals_.end(),
+		[&](shared_ptr<SignalBase> s) { return s == signal; }),
+		signals_.end());
+}
+
+deque<shared_ptr<SignalBase>> SignalGroup::signals() const
+{
+	return signals_;
+}
+
+void SignalGroup::clear()
+{
+	for (shared_ptr<SignalBase> sb : signals_)
+		sb->set_group(nullptr);
+
+	signals_.clear();
+}
+
+const QString SignalGroup::name() const
+{
+	return name_;
+}
+
+
 SignalBase::SignalBase(shared_ptr<sigrok::Channel> channel, ChannelType channel_type) :
 	channel_(channel),
 	channel_type_(channel_type),
+	group_(nullptr),
 	conversion_type_(NoConversion),
 	min_value_(0),
 	max_value_(0)
 {
-	if (channel_)
+	if (channel_) {
 		internal_name_ = QString::fromStdString(channel_->name());
+		index_ = channel_->index();
+	}
 
 	connect(&delayed_conversion_starter_, SIGNAL(timeout()),
 		this, SLOT(on_delayed_conversion_start()));
@@ -69,34 +116,6 @@ SignalBase::~SignalBase()
 shared_ptr<sigrok::Channel> SignalBase::channel() const
 {
 	return channel_;
-}
-
-QString SignalBase::name() const
-{
-	return (channel_) ? QString::fromStdString(channel_->name()) : name_;
-}
-
-QString SignalBase::internal_name() const
-{
-	return internal_name_;
-}
-
-QString SignalBase::display_name() const
-{
-	if ((name() != internal_name_) && (!internal_name_.isEmpty()))
-		return name() + " (" + internal_name_ + ")";
-	else
-		return name();
-}
-
-void SignalBase::set_name(QString name)
-{
-	if (channel_)
-		channel_->set_name(name.toUtf8().constData());
-
-	name_ = name;
-
-	name_changed(name);
 }
 
 bool SignalBase::enabled() const
@@ -119,15 +138,63 @@ SignalBase::ChannelType SignalBase::type() const
 
 unsigned int SignalBase::index() const
 {
-	return (channel_) ? channel_->index() : 0;
+	return index_;
+}
+
+void SignalBase::set_index(unsigned int index)
+{
+	index_ = index;
 }
 
 unsigned int SignalBase::logic_bit_index() const
 {
 	if (channel_type_ == LogicChannel)
-		return channel_->index();
+		return index_;
 	else
 		return 0;
+}
+
+void SignalBase::set_group(SignalGroup* group)
+{
+	group_ = group;
+}
+
+SignalGroup* SignalBase::group() const
+{
+	return group_;
+}
+
+QString SignalBase::name() const
+{
+	return (channel_) ? QString::fromStdString(channel_->name()) : name_;
+}
+
+QString SignalBase::internal_name() const
+{
+	return internal_name_;
+}
+
+void SignalBase::set_internal_name(QString internal_name)
+{
+	internal_name_ = internal_name;
+}
+
+QString SignalBase::display_name() const
+{
+	if ((name() != internal_name_) && (!internal_name_.isEmpty()))
+		return name() + " (" + internal_name_ + ")";
+	else
+		return name();
+}
+
+void SignalBase::set_name(QString name)
+{
+	if (channel_)
+		channel_->set_name(name.toUtf8().constData());
+
+	name_ = name;
+
+	name_changed(name);
 }
 
 QColor SignalBase::color() const
@@ -155,8 +222,8 @@ void SignalBase::set_data(shared_ptr<pv::data::SignalData> data)
 	if (data_) {
 		disconnect(data.get(), SIGNAL(samples_cleared()),
 			this, SLOT(on_samples_cleared()));
-		disconnect(data.get(), SIGNAL(samples_added(QObject*, uint64_t, uint64_t)),
-			this, SLOT(on_samples_added(QObject*, uint64_t, uint64_t)));
+		disconnect(data.get(), SIGNAL(samples_added(shared_ptr<Segment>, uint64_t, uint64_t)),
+			this, SLOT(on_samples_added(shared_ptr<Segment>, uint64_t, uint64_t)));
 
 		if (channel_type_ == AnalogChannel) {
 			shared_ptr<Analog> analog = analog_data();
@@ -172,8 +239,8 @@ void SignalBase::set_data(shared_ptr<pv::data::SignalData> data)
 	if (data_) {
 		connect(data.get(), SIGNAL(samples_cleared()),
 			this, SLOT(on_samples_cleared()));
-		connect(data.get(), SIGNAL(samples_added(QObject*, uint64_t, uint64_t)),
-			this, SLOT(on_samples_added(QObject*, uint64_t, uint64_t)));
+		connect(data.get(), SIGNAL(samples_added(SharedPtrToSegment, uint64_t, uint64_t)),
+			this, SLOT(on_samples_added(SharedPtrToSegment, uint64_t, uint64_t)));
 
 		if (channel_type_ == AnalogChannel) {
 			shared_ptr<Analog> analog = analog_data();
@@ -183,6 +250,15 @@ void SignalBase::set_data(shared_ptr<pv::data::SignalData> data)
 				this, SLOT(on_min_max_changed(float, float)));
 		}
 	}
+}
+
+void SignalBase::clear_sample_data()
+{
+	if (analog_data())
+		analog_data()->clear();
+
+	if (logic_data())
+		logic_data()->clear();
 }
 
 shared_ptr<data::Analog> SignalBase::analog_data() const
@@ -743,7 +819,7 @@ void SignalBase::on_samples_cleared()
 	samples_cleared();
 }
 
-void SignalBase::on_samples_added(QObject* segment, uint64_t start_sample,
+void SignalBase::on_samples_added(SharedPtrToSegment segment, uint64_t start_sample,
 	uint64_t end_sample)
 {
 	if (conversion_type_ != NoConversion) {
@@ -757,8 +833,7 @@ void SignalBase::on_samples_added(QObject* segment, uint64_t start_sample,
 		}
 	}
 
-	data::Segment* s = qobject_cast<data::Segment*>(segment);
-	samples_added(s->segment_id(), start_sample, end_sample);
+	samples_added(segment->segment_id(), start_sample, end_sample);
 }
 
 void SignalBase::on_min_max_changed(float min, float max)

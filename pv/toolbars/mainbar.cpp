@@ -90,6 +90,7 @@ MainBar::MainBar(Session &session, QWidget *parent, pv::views::trace::View *view
 	StandardBar(session, parent, view, false),
 	action_new_view_(new QAction(this)),
 	action_open_(new QAction(this)),
+	action_save_(new QAction(this)),
 	action_save_as_(new QAction(this)),
 	action_save_selection_as_(new QAction(this)),
 	action_restore_setup_(new QAction(this)),
@@ -134,10 +135,16 @@ MainBar::MainBar(Session &session, QWidget *parent, pv::views::trace::View *view
 	connect(action_restore_setup_, SIGNAL(triggered(bool)),
 		this, SLOT(on_actionRestoreSetup_triggered()));
 
-	action_save_as_->setText(tr("&Save As..."));
+	action_save_->setText(tr("&Save..."));
+	action_save_->setIcon(QIcon::fromTheme("document-save-as",
+		QIcon(":/icons/document-save-as.png")));
+	action_save_->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_S));
+	connect(action_save_, SIGNAL(triggered(bool)),
+		this, SLOT(on_actionSave_triggered()));
+
+	action_save_as_->setText(tr("Save &As..."));
 	action_save_as_->setIcon(QIcon::fromTheme("document-save-as",
 		QIcon(":/icons/document-save-as.png")));
-	action_save_as_->setShortcut(QKeySequence(Qt::CTRL + Qt::Key_S));
 	connect(action_save_as_, SIGNAL(triggered(bool)),
 		this, SLOT(on_actionSaveAs_triggered()));
 
@@ -175,7 +182,7 @@ MainBar::MainBar(Session &session, QWidget *parent, pv::views::trace::View *view
 
 	for (int i = 0; i < views::ViewTypeCount; i++) {
 		QAction *const action =	menu_new_view->addAction(tr(views::ViewTypeNames[i]));
-		action->setData(qVariantFromValue(i));
+		action->setData(QVariant::fromValue(i));
 	}
 
 	new_view_button_->setMenu(menu_new_view);
@@ -201,6 +208,7 @@ MainBar::MainBar(Session &session, QWidget *parent, pv::views::trace::View *view
 
 	// Save button
 	vector<QAction*> save_actions;
+	save_actions.push_back(action_save_);
 	save_actions.push_back(action_save_as_);
 	save_actions.push_back(action_save_selection_as_);
 	QAction* separator_s = new QAction(this);
@@ -214,7 +222,7 @@ MainBar::MainBar(Session &session, QWidget *parent, pv::views::trace::View *view
 		this, SLOT(export_file(shared_ptr<sigrok::OutputFormat>)));
 
 	save_button_->setMenu(export_menu);
-	save_button_->setDefaultAction(action_save_as_);
+	save_button_->setDefaultAction(action_save_);
 	save_button_->setPopupMode(QToolButton::MenuButtonPopup);
 
 	// Device selector menu
@@ -296,6 +304,11 @@ void MainBar::reset_device_selector()
 QAction* MainBar::action_open() const
 {
 	return action_open_;
+}
+
+QAction* MainBar::action_save() const
+{
+	return action_save_;
 }
 
 QAction* MainBar::action_save_as() const
@@ -595,7 +608,7 @@ void MainBar::show_session_error(const QString text, const QString info_text)
 	msg.exec();
 }
 
-void MainBar::export_file(shared_ptr<OutputFormat> format, bool selection_only)
+void MainBar::export_file(shared_ptr<OutputFormat> format, bool selection_only, QString file_name)
 {
 	using pv::dialogs::StoreProgress;
 
@@ -654,8 +667,8 @@ void MainBar::export_file(shared_ptr<OutputFormat> format, bool selection_only)
 			tr("All Files"));
 
 	// Show the file dialog
-	const QString file_name = QFileDialog::getSaveFileName(
-		this, tr("Save File"), dir, filter);
+	if (file_name.isEmpty())
+		file_name = QFileDialog::getSaveFileName(this, tr("Save File"), dir, filter);
 
 	if (file_name.isEmpty())
 		return;
@@ -675,8 +688,13 @@ void MainBar::export_file(shared_ptr<OutputFormat> format, bool selection_only)
 		options = dlg.options();
 	}
 
-	if (!selection_only)
-		session_.set_name(QFileInfo(file_name).fileName());
+	if (!selection_only) {
+		if (format == session_.device_manager().context()->output_formats()["srzip"]) {
+			session_.set_save_path(QFileInfo(file_name).absolutePath());
+			session_.set_name(QFileInfo(file_name).fileName());
+		} else
+			session_.set_save_path("");
+	}
 
 	StoreProgress *dlg = new StoreProgress(file_name, format, options,
 		sample_range, session_, this);
@@ -796,6 +814,19 @@ void MainBar::on_actionOpen_triggered()
 		const QString abs_path = QFileInfo(file_name).absolutePath();
 		settings.setValue(SettingOpenDirectory, abs_path);
 	}
+}
+
+void MainBar::on_actionSave_triggered()
+{
+	// A path is only set if we loaded/saved an srzip file before
+	if (session_.save_path().isEmpty()) {
+		on_actionSaveAs_triggered();
+		return;
+	}
+
+	QFileInfo fi = QFileInfo(QDir(session_.save_path()), session_.name());
+	export_file(session_.device_manager().context()->output_formats()["srzip"], false,
+		fi.absoluteFilePath());
 }
 
 void MainBar::on_actionSaveAs_triggered()

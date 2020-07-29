@@ -83,8 +83,11 @@ void DecodeSignal::stack_decoder(const srd_decoder *decoder, bool restart_decode
 	if ((stack_.empty()) || ((stack_.size() > 0) && (name() == prev_dec_name)))
 		set_name(QString::fromUtf8(decoder->name));
 
-	const shared_ptr<Decoder> dec = make_shared<Decoder>(decoder);
+	const shared_ptr<Decoder> dec = make_shared<Decoder>(decoder, stack_.size());
 	stack_.push_back(dec);
+
+	connect(dec.get(), SIGNAL(annotation_visibility_changed()),
+		this, SLOT(on_annotation_visibility_changed()));
 
 	// Include the newly created decode channels in the channel lists
 	update_channel_list();
@@ -105,11 +108,12 @@ void DecodeSignal::remove_decoder(int index)
 	assert(index < (int)stack_.size());
 
 	// Find the decoder in the stack
-	auto iter = stack_.begin();
-	for (int i = 0; i < index; i++, iter++)
-		assert(iter != stack_.end());
+	auto iter = stack_.begin() + index;
+	assert(iter != stack_.end());
 
-	decoder_removed(iter->get());
+	shared_ptr<Decoder> dec = *iter;
+
+	decoder_removed(dec.get());
 
 	// Delete the element
 	stack_.erase(iter);
@@ -358,7 +362,7 @@ void DecodeSignal::set_initial_pin_state(const uint16_t channel_id, const int in
 	begin_decode();
 }
 
-double DecodeSignal::samplerate() const
+double DecodeSignal::get_samplerate() const
 {
 	double result = 0;
 
@@ -391,18 +395,20 @@ int64_t DecodeSignal::get_working_sample_count(uint32_t segment_id) const
 
 	for (const decode::DecodeChannel& ch : channels_)
 		if (ch.assigned_signal) {
+			if (!ch.assigned_signal->logic_data())
+				return 0;
+
 			no_signals_assigned = false;
 
 			const shared_ptr<Logic> logic_data = ch.assigned_signal->logic_data();
-			if (!logic_data || logic_data->logic_segments().empty())
+			if (logic_data->logic_segments().empty())
 				return 0;
 
-			try {
-				const shared_ptr<LogicSegment> segment = logic_data->logic_segments().at(segment_id);
-				count = min(count, (int64_t)segment->get_sample_count());
-			} catch (out_of_range&) {
+			if (segment_id >= logic_data->logic_segments().size())
 				return 0;
-			}
+
+			const shared_ptr<LogicSegment> segment = logic_data->logic_segments()[segment_id];
+			count = min(count, (int64_t)segment->get_sample_count());
 		}
 
 	return (no_signals_assigned ? 0 : count);
@@ -509,18 +515,14 @@ void DecodeSignal::get_annotation_subset(deque<const Annotation*> &dest,
 uint32_t DecodeSignal::get_binary_data_chunk_count(uint32_t segment_id,
 	const Decoder* dec, uint32_t bin_class_id) const
 {
-	if (segments_.size() == 0)
+	if ((segments_.size() == 0) || (segment_id >= segments_.size()))
 		return 0;
 
-	try {
-		const DecodeSegment *segment = &(segments_.at(segment_id));
+	const DecodeSegment *segment = &(segments_[segment_id]);
 
-		for (const DecodeBinaryClass& bc : segment->binary_classes)
-			if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
-				return bc.chunks.size();
-	} catch (out_of_range&) {
-		// Do nothing
-	}
+	for (const DecodeBinaryClass& bc : segment->binary_classes)
+		if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
+			return bc.chunks.size();
 
 	return 0;
 }
@@ -529,18 +531,17 @@ void DecodeSignal::get_binary_data_chunk(uint32_t segment_id,
 	const  Decoder* dec, uint32_t bin_class_id, uint32_t chunk_id,
 	const vector<uint8_t> **dest, uint64_t *size)
 {
-	try {
-		const DecodeSegment *segment = &(segments_.at(segment_id));
+	if (segment_id >= segments_.size())
+		return;
 
-		for (const DecodeBinaryClass& bc : segment->binary_classes)
-			if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id)) {
-				if (dest) *dest = &(bc.chunks.at(chunk_id).data);
-				if (size) *size = bc.chunks.at(chunk_id).data.size();
-				return;
-			}
-	} catch (out_of_range&) {
-		// Do nothing
-	}
+	const DecodeSegment *segment = &(segments_[segment_id]);
+
+	for (const DecodeBinaryClass& bc : segment->binary_classes)
+		if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id)) {
+			if (dest) *dest = &(bc.chunks.at(chunk_id).data);
+			if (size) *size = bc.chunks.at(chunk_id).data.size();
+			return;
+		}
 }
 
 void DecodeSignal::get_merged_binary_data_chunks_by_sample(uint32_t segment_id,
@@ -549,39 +550,38 @@ void DecodeSignal::get_merged_binary_data_chunks_by_sample(uint32_t segment_id,
 {
 	assert(dest != nullptr);
 
-	try {
-		const DecodeSegment *segment = &(segments_.at(segment_id));
+	if (segment_id >= segments_.size())
+		return;
 
-		const DecodeBinaryClass* bin_class = nullptr;
-		for (const DecodeBinaryClass& bc : segment->binary_classes)
-			if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
-				bin_class = &bc;
+	const DecodeSegment *segment = &(segments_[segment_id]);
 
-		// Determine overall size before copying to resize dest vector only once
-		uint64_t size = 0;
-		uint64_t matches = 0;
-		for (const DecodeBinaryDataChunk& chunk : bin_class->chunks)
-			if ((chunk.sample >= start_sample) && (chunk.sample < end_sample)) {
-				size += chunk.data.size();
-				matches++;
-			}
-		dest->resize(size);
+	const DecodeBinaryClass* bin_class = nullptr;
+	for (const DecodeBinaryClass& bc : segment->binary_classes)
+		if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
+			bin_class = &bc;
 
-		uint64_t offset = 0;
-		uint64_t matches2 = 0;
-		for (const DecodeBinaryDataChunk& chunk : bin_class->chunks)
-			if ((chunk.sample >= start_sample) && (chunk.sample < end_sample)) {
-				memcpy(dest->data() + offset, chunk.data.data(), chunk.data.size());
-				offset += chunk.data.size();
-				matches2++;
+	// Determine overall size before copying to resize dest vector only once
+	uint64_t size = 0;
+	uint64_t matches = 0;
+	for (const DecodeBinaryDataChunk& chunk : bin_class->chunks)
+		if ((chunk.sample >= start_sample) && (chunk.sample < end_sample)) {
+			size += chunk.data.size();
+			matches++;
+		}
+	dest->resize(size);
 
-				// Make sure we don't overwrite memory if the array grew in the meanwhile
-				if (matches2 == matches)
-					break;
-			}
-	} catch (out_of_range&) {
-		// Do nothing
-	}
+	uint64_t offset = 0;
+	uint64_t matches2 = 0;
+	for (const DecodeBinaryDataChunk& chunk : bin_class->chunks)
+		if ((chunk.sample >= start_sample) && (chunk.sample < end_sample)) {
+			memcpy(dest->data() + offset, chunk.data.data(), chunk.data.size());
+			offset += chunk.data.size();
+			matches2++;
+
+			// Make sure we don't overwrite memory if the array grew in the meanwhile
+			if (matches2 == matches)
+				break;
+		}
 }
 
 void DecodeSignal::get_merged_binary_data_chunks_by_offset(uint32_t segment_id,
@@ -590,56 +590,65 @@ void DecodeSignal::get_merged_binary_data_chunks_by_offset(uint32_t segment_id,
 {
 	assert(dest != nullptr);
 
-	try {
-		const DecodeSegment *segment = &(segments_.at(segment_id));
+	if (segment_id >= segments_.size())
+		return;
 
-		const DecodeBinaryClass* bin_class = nullptr;
-		for (const DecodeBinaryClass& bc : segment->binary_classes)
-			if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
-				bin_class = &bc;
+	const DecodeSegment *segment = &(segments_[segment_id]);
 
-		// Determine overall size before copying to resize dest vector only once
-		uint64_t size = 0;
-		uint64_t offset = 0;
-		for (const DecodeBinaryDataChunk& chunk : bin_class->chunks) {
-			if (offset >= start)
-				size += chunk.data.size();
-			offset += chunk.data.size();
-			if (offset >= end)
-				break;
+	const DecodeBinaryClass* bin_class = nullptr;
+	for (const DecodeBinaryClass& bc : segment->binary_classes)
+		if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
+			bin_class = &bc;
+
+	// Determine overall size before copying to resize dest vector only once
+	uint64_t size = 0;
+	uint64_t offset = 0;
+	for (const DecodeBinaryDataChunk& chunk : bin_class->chunks) {
+		if (offset >= start)
+			size += chunk.data.size();
+		offset += chunk.data.size();
+		if (offset >= end)
+			break;
+	}
+	dest->resize(size);
+
+	offset = 0;
+	uint64_t dest_offset = 0;
+	for (const DecodeBinaryDataChunk& chunk : bin_class->chunks) {
+		if (offset >= start) {
+			memcpy(dest->data() + dest_offset, chunk.data.data(), chunk.data.size());
+			dest_offset += chunk.data.size();
 		}
-		dest->resize(size);
-
-		offset = 0;
-		uint64_t dest_offset = 0;
-		for (const DecodeBinaryDataChunk& chunk : bin_class->chunks) {
-			if (offset >= start) {
-				memcpy(dest->data() + dest_offset, chunk.data.data(), chunk.data.size());
-				dest_offset += chunk.data.size();
-			}
-			offset += chunk.data.size();
-			if (offset >= end)
-				break;
-		}
-	} catch (out_of_range&) {
-		// Do nothing
+		offset += chunk.data.size();
+		if (offset >= end)
+			break;
 	}
 }
 
 const DecodeBinaryClass* DecodeSignal::get_binary_data_class(uint32_t segment_id,
 	const Decoder* dec, uint32_t bin_class_id) const
 {
-	try {
-		const DecodeSegment *segment = &(segments_.at(segment_id));
+	if (segment_id >= segments_.size())
+		return nullptr;
 
-		for (const DecodeBinaryClass& bc : segment->binary_classes)
-			if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
-				return &bc;
-	} catch (out_of_range&) {
-		// Do nothing
-	}
+	const DecodeSegment *segment = &(segments_[segment_id]);
+
+	for (const DecodeBinaryClass& bc : segment->binary_classes)
+		if ((bc.decoder == dec) && (bc.info->bin_class_id == bin_class_id))
+			return &bc;
 
 	return nullptr;
+}
+
+const deque<const Annotation*>* DecodeSignal::get_all_annotations_by_segment(
+	uint32_t segment_id) const
+{
+	if (segment_id >= segments_.size())
+		return nullptr;
+
+	const DecodeSegment *segment = &(segments_[segment_id]);
+
+	return &(segment->all_annotations);
 }
 
 void DecodeSignal::save_settings(QSettings &settings) const
@@ -685,7 +694,7 @@ void DecodeSignal::save_settings(QSettings &settings) const
 		i = 0;
 		for (const AnnotationClass* ann_class : decoder->ann_classes()) {
 			settings.beginGroup("ann_class" + QString::number(i));
-			settings.setValue("visible", ann_class->visible);
+			settings.setValue("visible", ann_class->visible());
 			settings.endGroup();
 			i++;
 		}
@@ -737,7 +746,10 @@ void DecodeSignal::restore_settings(QSettings &settings)
 				continue;
 
 			if (QString::fromUtf8(dec->id) == id) {
-				shared_ptr<Decoder> decoder = make_shared<Decoder>(dec);
+				shared_ptr<Decoder> decoder = make_shared<Decoder>(dec, stack_.size());
+
+				connect(decoder.get(), SIGNAL(annotation_visibility_changed()),
+					this, SLOT(on_annotation_visibility_changed()));
 
 				stack_.push_back(decoder);
 				decoder->set_visible(settings.value("visible", true).toBool());
@@ -769,7 +781,7 @@ void DecodeSignal::restore_settings(QSettings &settings)
 				i = 0;
 				for (AnnotationClass* ann_class : decoder->ann_classes()) {
 					settings.beginGroup("ann_class" + QString::number(i));
-					ann_class->visible = settings.value("visible", true).toBool();
+					ann_class->set_visible(settings.value("visible", true).toBool());
 					settings.endGroup();
 					i++;
 				}
@@ -802,7 +814,7 @@ void DecodeSignal::restore_settings(QSettings &settings)
 		QString assigned_signal_name = settings.value("assigned_signal_name").toString();
 
 		for (const shared_ptr<data::SignalBase>& signal : signalbases)
-			if (signal->name() == assigned_signal_name)
+			if ((signal->name() == assigned_signal_name) && (signal->type() != SignalBase::DecodeChannel))
 				channel->assigned_signal = signal.get();
 
 		channel->initial_pin_state = settings.value("initial_pin_state").toInt();
@@ -1379,7 +1391,7 @@ void DecodeSignal::connect_input_notifiers()
 void DecodeSignal::create_decode_segment()
 {
 	// Create annotation segment
-	segments_.emplace_back(DecodeSegment());
+	segments_.emplace_back();
 
 	// Add annotation classes
 	for (const shared_ptr<Decoder>& dec : stack_)
@@ -1405,6 +1417,9 @@ void DecodeSignal::annotation_callback(srd_proto_data *pdata, void *decode_signa
 	assert(ds);
 
 	if (ds->decode_interrupt_)
+		return;
+
+	if (ds->segments_.empty())
 		return;
 
 	lock_guard<mutex> lock(ds->output_mutex_);
@@ -1435,8 +1450,67 @@ void DecodeSignal::annotation_callback(srd_proto_data *pdata, void *decode_signa
 	if (!row)
 		row = dec->get_row_by_id(0);
 
-	// Add the annotation
-	ds->segments_[ds->current_segment_id_].annotation_rows.at(row).emplace_annotation(pdata);
+	RowData& row_data = ds->segments_[ds->current_segment_id_].annotation_rows.at(row);
+
+	// Add the annotation to the row
+	const Annotation* ann = row_data.emplace_annotation(pdata);
+
+	// We insert the annotation into the global annotation list in a way so that
+	// the annotation list is sorted by start sample and length. Otherwise, we'd
+	// have to sort the model, which is expensive
+	deque<const Annotation*>& all_annotations =
+		ds->segments_[ds->current_segment_id_].all_annotations;
+
+	if (all_annotations.empty()) {
+		all_annotations.emplace_back(ann);
+	} else {
+		const uint64_t new_ann_len = (pdata->end_sample - pdata->start_sample);
+		bool ann_has_earlier_start = (pdata->start_sample < all_annotations.back()->start_sample());
+		bool ann_is_longer = (new_ann_len >
+			(all_annotations.back()->end_sample() - all_annotations.back()->start_sample()));
+
+		if (ann_has_earlier_start && ann_is_longer) {
+			bool ann_has_same_start;
+			auto it = all_annotations.end();
+
+			do {
+				it--;
+				ann_has_earlier_start = (pdata->start_sample < (*it)->start_sample());
+				ann_has_same_start = (pdata->start_sample == (*it)->start_sample());
+				ann_is_longer = (new_ann_len > (*it)->length());
+			} while ((ann_has_earlier_start || (ann_has_same_start && ann_is_longer)) && (it != all_annotations.begin()));
+
+			// Allow inserting at the front
+			if (it != all_annotations.begin())
+				it++;
+
+			all_annotations.emplace(it, ann);
+		} else
+			all_annotations.emplace_back(ann);
+	}
+
+	// When emplace_annotation() inserts instead of appends an annotation,
+	// the pointers in all_annotations that follow the inserted annotation and
+	// point to annotations for this row are off by one and must be updated
+	if (&(row_data.annotations().back()) != ann) {
+		// Search backwards until we find the annotation we just added
+		auto row_it = row_data.annotations().end();
+		auto all_it = all_annotations.end();
+		do {
+			all_it--;
+			if ((*all_it)->row_data() == &row_data)
+				row_it--;
+		} while (&(*row_it) != ann);
+
+		// Update the annotation addresses for this row's annotations until the end
+		do {
+			if ((*all_it)->row_data() == &row_data) {
+				*all_it = &(*row_it);
+				row_it++;
+			}
+			all_it++;
+		} while (all_it != all_annotations.end());
+	}
 }
 
 void DecodeSignal::binary_callback(srd_proto_data *pdata, void *decode_signal)
@@ -1514,6 +1588,11 @@ void DecodeSignal::on_data_received()
 		begin_decode();
 	else
 		logic_mux_cond_.notify_one();
+}
+
+void DecodeSignal::on_annotation_visibility_changed()
+{
+	annotation_visibility_changed();
 }
 
 } // namespace data

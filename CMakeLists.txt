@@ -123,6 +123,14 @@ if(ENABLE_TESTS)
 endif()
 
 if(ENABLE_STACKTRACE)
+	include(FindBacktrace)
+	if (Backtrace_FOUND)
+		set(_Boost_STACKTRACE_BACKTRACE_HEADERS "boost/stacktrace.hpp")
+		list(APPEND BOOSTCOMPS stacktrace_backtrace)
+	else()
+		set(_Boost_STACKTRACE_BASIC_HEADERS     "boost/stacktrace.hpp")
+		list(APPEND BOOSTCOMPS stacktrace_basic)
+	endif()
 	find_package(Boost 1.65.1 COMPONENTS ${BOOSTCOMPS} REQUIRED)
 else()
 	find_package(Boost 1.55 COMPONENTS ${BOOSTCOMPS} REQUIRED)
@@ -239,6 +247,7 @@ set(pulseview_SOURCES
 	pv/globalsettings.cpp
 	pv/logging.cpp
 	pv/mainwindow.cpp
+	pv/metadata_obj.cpp
 	pv/session.cpp
 	pv/storesession.cpp
 	pv/util.cpp
@@ -314,6 +323,7 @@ set(pulseview_HEADERS
 	pv/logging.hpp
 	pv/globalsettings.hpp
 	pv/mainwindow.hpp
+	pv/metadata_obj.hpp
 	pv/session.hpp
 	pv/storesession.hpp
 	pv/binding/device.hpp
@@ -391,6 +401,8 @@ if(ENABLE_DECODE)
 		pv/subwindows/decoder_selector/subwindow.cpp
 		pv/views/decoder_binary/view.cpp
 		pv/views/decoder_binary/QHexView.cpp
+		pv/views/tabular_decoder/model.cpp
+		pv/views/tabular_decoder/view.cpp
 		pv/views/trace/decodetrace.cpp
 		pv/widgets/decodergroupbox.cpp
 		pv/widgets/decodermenu.cpp
@@ -401,6 +413,7 @@ if(ENABLE_DECODE)
 		pv/subwindows/decoder_selector/subwindow.hpp
 		pv/views/decoder_binary/view.hpp
 		pv/views/decoder_binary/QHexView.hpp
+		pv/views/tabular_decoder/view.hpp
 		pv/views/trace/decodetrace.hpp
 		pv/widgets/decodergroupbox.hpp
 		pv/widgets/decodermenu.hpp
@@ -465,7 +478,10 @@ if(ENABLE_SIGNALS)
 endif()
 
 if(ENABLE_STACKTRACE)
-	add_definitions(-DENABLE_STACKTRACE)
+	add_definitions(-DENABLE_STACKTRACE -no-pie -fno-pie)
+	if (Backtrace_FOUND)
+		add_definitions(-DBOOST_STACKTRACE_USE_BACKTRACE)
+	endif()
 endif()
 
 #===============================================================================
@@ -520,8 +536,8 @@ if(WIN32)
 endif()
 
 if(ENABLE_STACKTRACE)
-	# Needed to resolve dladdr.
-	list(APPEND PULSEVIEW_LINK_LIBS "-ldl")
+	list(APPEND PULSEVIEW_LINK_LIBS ${CMAKE_DL_LIBS} ${Backtrace_LIBRARIES})
+	link_libraries("-no-pie -fno-pie")
 endif()
 
 if(ANDROID)

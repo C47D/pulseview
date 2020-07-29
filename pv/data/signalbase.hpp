@@ -22,6 +22,7 @@
 #define PULSEVIEW_PV_DATA_SIGNALBASE_HPP
 
 #include <atomic>
+#include <deque>
 #include <condition_variable>
 #include <thread>
 #include <vector>
@@ -35,8 +36,12 @@
 
 #include <libsigrokcxx/libsigrokcxx.hpp>
 
+#include "segment.hpp"
+
 using std::atomic;
 using std::condition_variable;
+using std::deque;
+using std::enable_shared_from_this;
 using std::map;
 using std::mutex;
 using std::pair;
@@ -55,9 +60,31 @@ class AnalogSegment;
 class DecoderStack;
 class Logic;
 class LogicSegment;
+class Segment;
+class SignalBase;
 class SignalData;
 
-class SignalBase : public QObject
+class SignalGroup : public QObject
+{
+	Q_OBJECT
+
+public:
+	SignalGroup(const QString& name);
+
+	void append_signal(shared_ptr<SignalBase> signal);
+	void remove_signal(shared_ptr<SignalBase> signal);
+	deque<shared_ptr<SignalBase>> signals() const;
+	void clear();
+
+	const QString name() const;
+
+private:
+	deque<shared_ptr<SignalBase>> signals_;
+	QString name_;
+};
+
+
+class SignalBase : public QObject, public enable_shared_from_this<SignalBase>
 {
 	Q_OBJECT
 
@@ -97,6 +124,7 @@ public:
 public:
 	/**
 	 * Returns the underlying SR channel.
+	 * Generated channels don't have a SR channel.
 	 */
 	shared_ptr<sigrok::Channel> channel() const;
 
@@ -123,6 +151,13 @@ public:
 	unsigned int index() const;
 
 	/**
+	 * Sets the index number of this channel, i.e. a unique ID assigned by
+	 * the device driver or the logic bit index (see below).
+	 * Only use immediately after creating the signal and leave it untouched after.
+	 */
+	void set_index(unsigned int index);
+
+	/**
 	 * Returns which bit of a given sample for this signal represents the
 	 * signal itself. This is relevant for compound signals like logic,
 	 * rather meaningless for everything else but provided in case there
@@ -131,14 +166,30 @@ public:
 	unsigned int logic_bit_index() const;
 
 	/**
+	 * Sets the signal group this signal belongs to
+	 */
+	void set_group(SignalGroup* group);
+
+	/**
+	 * Returns the signal group this signal belongs to or nullptr if none
+	 */
+	SignalGroup* group() const;
+
+	/**
 	 * Gets the name of this signal.
 	 */
 	QString name() const;
 
 	/**
-	 * Gets the internal name of this signal, i.e. how the device calls it.
+	 * Gets the internal name of this signal, i.e. how the device/generator calls it.
 	 */
 	QString internal_name() const;
+
+	/**
+	 * Sets the internal name of this signal, i.e. how the device/generator calls it.
+	 * Only use immediately after creating the signal and leave it untouched after.
+	 */
+	void set_internal_name(QString internal_name);
 
 	/**
 	 * Produces a string for this signal that can be used for display,
@@ -172,6 +223,11 @@ public:
 	void set_data(shared_ptr<pv::data::SignalData> data);
 
 	/**
+	 * Clears all sample data and removes all associated segments.
+	 */
+	void clear_sample_data();
+
+	/**
 	 * Get the internal data as analog data object in case of analog type.
 	 */
 	shared_ptr<pv::data::Analog> analog_data() const;
@@ -195,7 +251,7 @@ public:
 	/**
 	 * Returns the sample rate for this signal.
 	 */
-	double get_samplerate() const;
+	virtual double get_samplerate() const;
 
 	/**
 	 * Queries the kind of conversion performed on this channel.
@@ -317,7 +373,7 @@ Q_SIGNALS:
 private Q_SLOTS:
 	void on_samples_cleared();
 
-	void on_samples_added(QObject* segment, uint64_t start_sample,
+	void on_samples_added(SharedPtrToSegment segment, uint64_t start_sample,
 		uint64_t end_sample);
 
 	void on_min_max_changed(float min, float max);
@@ -329,6 +385,7 @@ private Q_SLOTS:
 protected:
 	shared_ptr<sigrok::Channel> channel_;
 	ChannelType channel_type_;
+	SignalGroup* group_;
 	shared_ptr<pv::data::SignalData> data_;
 	shared_ptr<pv::data::SignalData> converted_data_;
 	ConversionType conversion_type_;
@@ -344,6 +401,7 @@ protected:
 
 	QString internal_name_, name_;
 	QColor color_, bgcolor_;
+	unsigned int index_;
 };
 
 } // namespace data
