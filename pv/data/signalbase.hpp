@@ -87,6 +87,7 @@ private:
 class SignalBase : public QObject, public enable_shared_from_this<SignalBase>
 {
 	Q_OBJECT
+	Q_PROPERTY(QString error_message READ get_error_message)
 
 public:
 	enum ChannelType {
@@ -112,6 +113,9 @@ public:
 		DynamicPreset = 0  ///< Conversion uses calculated values
 	};
 
+	static const QColor AnalogSignalColors[8];
+	static const QColor LogicSignalColors[10];
+
 private:
 	static const int ColorBGAlpha;
 	static const uint64_t ConversionBlockSize;
@@ -127,6 +131,11 @@ public:
 	 * Generated channels don't have a SR channel.
 	 */
 	shared_ptr<sigrok::Channel> channel() const;
+
+	/**
+	 * Returns whether this channel is generated or a channel associated with the device.
+	 */
+	bool is_generated() const;
 
 	/**
 	 * Returns enabled status of this channel.
@@ -216,6 +225,11 @@ public:
 	 * Get the background color of the signal.
 	 */
 	QColor bgcolor() const;
+
+	/**
+	 * Returns the current error message text.
+	 */
+	virtual QString get_error_message() const;
 
 	/**
 	 * Sets the internal data object.
@@ -334,37 +348,36 @@ public:
 #endif
 
 	virtual void save_settings(QSettings &settings) const;
-
 	virtual void restore_settings(QSettings &settings);
 
 	void start_conversion(bool delayed_start=false);
 
+protected:
+	virtual void set_error_message(QString msg);
+
 private:
+	void stop_conversion();
+
 	bool conversion_is_a2l() const;
 
 	uint8_t convert_a2l_threshold(float threshold, float value);
 	uint8_t convert_a2l_schmitt_trigger(float lo_thr, float hi_thr,
 		float value, uint8_t &state);
 
-	void convert_single_segment_range(AnalogSegment *asegment,
-		LogicSegment *lsegment, uint64_t start_sample, uint64_t end_sample);
-	void convert_single_segment(pv::data::AnalogSegment *asegment,
-		pv::data::LogicSegment *lsegment);
+	void convert_single_segment_range(shared_ptr<AnalogSegment> asegment,
+		shared_ptr<LogicSegment> lsegment, uint64_t start_sample, uint64_t end_sample);
+	void convert_single_segment(shared_ptr<AnalogSegment> asegment,
+		shared_ptr<LogicSegment> lsegment);
 	void conversion_thread_proc();
-
-	void stop_conversion();
 
 Q_SIGNALS:
 	void enabled_changed(const bool &value);
-
 	void name_changed(const QString &name);
-
 	void color_changed(const QColor &color);
-
+	void error_message_changed(const QString &msg);
 	void conversion_type_changed(const ConversionType t);
 
 	void samples_cleared();
-
 	void samples_added(uint64_t segment_id, uint64_t start_sample,
 		uint64_t end_sample);
 
@@ -402,9 +415,13 @@ protected:
 	QString internal_name_, name_;
 	QColor color_, bgcolor_;
 	unsigned int index_;
+
+	QString error_message_;
 };
 
 } // namespace data
 } // namespace pv
+
+Q_DECLARE_METATYPE(shared_ptr<pv::data::SignalBase>);
 
 #endif // PULSEVIEW_PV_DATA_SIGNALBASE_HPP

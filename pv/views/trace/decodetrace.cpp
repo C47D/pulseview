@@ -82,7 +82,6 @@ namespace pv {
 namespace views {
 namespace trace {
 
-const QColor DecodeTrace::ErrorBgColor = QColor(0xEF, 0x29, 0x29);
 const QColor DecodeTrace::NoDecodeColor = QColor(0x88, 0x8A, 0x85);
 const QColor DecodeTrace::ExpandMarkerWarnColor = QColor(0xFF, 0xA5, 0x00); // QColorConstants::Svg::orange
 const QColor DecodeTrace::ExpandMarkerHiddenColor = QColor(0x69, 0x69, 0x69); // QColorConstants::Svg::dimgray
@@ -337,9 +336,9 @@ void DecodeTrace::paint_mid(QPainter &p, ViewItemPaintParams &pp)
 		owner_->row_item_appearance_changed(false, true);
 	}
 
-	const QString err = decode_signal_->error_message();
+	const QString err = base_->get_error_message();
 	if (!err.isEmpty())
-		draw_error(p, err, pp);
+		paint_error(p, pp);
 
 #if DECODETRACE_SHOW_RENDER_TIME
 	qDebug() << "Rendering" << base_->name() << "took" << render_time_.elapsed() << "ms";
@@ -908,28 +907,6 @@ void DecodeTrace::draw_range(const Annotation* a, QPainter &p,
 		best_annotation, Qt::ElideRight, rect.width()));
 }
 
-void DecodeTrace::draw_error(QPainter &p, const QString &message,
-	const ViewItemPaintParams &pp)
-{
-	const int y = get_visual_y();
-
-	double samples_per_pixel, pixels_offset;
-	tie(pixels_offset, samples_per_pixel) = get_pixels_offset_samples_per_pixel();
-
-	p.setPen(ErrorBgColor.darker());
-	p.setBrush(ErrorBgColor);
-
-	const QRectF bounding_rect = QRectF(pp.left(), INT_MIN / 2 + y, pp.right(), INT_MAX);
-
-	const QRectF text_rect = p.boundingRect(bounding_rect, Qt::AlignCenter, message);
-	const qreal r = text_rect.height() / 4;
-
-	p.drawRoundedRect(text_rect.adjusted(-r, -r, r, r), r, r, Qt::AbsoluteSize);
-
-	p.setPen(Qt::black);
-	p.drawText(text_rect, message);
-}
-
 void DecodeTrace::draw_unresolved_period(QPainter &p, int left, int right) const
 {
 	double samples_per_pixel, pixels_offset;
@@ -1154,10 +1131,9 @@ QComboBox* DecodeTrace::create_channel_selector(QWidget *parent, const DecodeCha
 	for (const shared_ptr<data::SignalBase> &b : sig_list) {
 		assert(b);
 		if (b->logic_data() && b->enabled()) {
-			selector->addItem(b->name(),
-				QVariant::fromValue((void*)b.get()));
+			selector->addItem(b->name(), QVariant::fromValue(b));
 
-			if (ch->assigned_signal == b.get())
+			if (ch->assigned_signal == b)
 				selector->setCurrentIndex(selector->count() - 1);
 		}
 	}
@@ -1546,8 +1522,8 @@ void DecodeTrace::on_channel_selected(int)
 	QComboBox *cb = qobject_cast<QComboBox*>(QObject::sender());
 
 	// Determine signal that was selected
-	const data::SignalBase *signal =
-		(data::SignalBase*)cb->itemData(cb->currentIndex()).value<void*>();
+	shared_ptr<data::SignalBase> signal =
+		cb->itemData(cb->currentIndex()).value<shared_ptr<data::SignalBase>>();
 
 	// Determine decode channel ID this combo box is the channel selector for
 	const uint16_t id = channel_id_map_.at(cb);

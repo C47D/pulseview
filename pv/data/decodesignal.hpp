@@ -27,7 +27,6 @@
 #include <vector>
 
 #include <QSettings>
-#include <QString>
 
 #include <libsigrokdecode/libsigrokdecode.h>
 
@@ -115,11 +114,10 @@ public:
 	void pause_decode();
 	void resume_decode();
 	bool is_paused() const;
-	QString error_message() const;
 
 	const vector<decode::DecodeChannel> get_channels() const;
 	void auto_assign_signals(const shared_ptr<Decoder> dec);
-	void assign_signal(const uint16_t channel_id, const SignalBase *signal);
+	void assign_signal(const uint16_t channel_id, shared_ptr<const SignalBase> signal);
 	int get_assigned_signal_count() const;
 
 	void set_initial_pin_state(const uint16_t channel_id, const int init_state);
@@ -189,10 +187,9 @@ public:
 	virtual void restore_settings(QSettings &settings);
 
 private:
-	void set_error_message(QString msg);
-
+	bool all_input_segments_complete(uint32_t segment_id) const;
 	uint32_t get_input_segment_count() const;
-	uint32_t get_input_samplerate(uint32_t segment_id) const;
+	double get_input_samplerate(uint32_t segment_id) const;
 
 	Decoder* get_decoder_by_instance(const srd_decoder *const srd_dec);
 
@@ -204,7 +201,7 @@ private:
 	void logic_mux_proc();
 
 	void decode_data(const int64_t abs_start_samplenum, const int64_t sample_count,
-		const shared_ptr<LogicSegment> input_segment);
+		const shared_ptr<const LogicSegment> input_segment);
 	void decode_proc();
 
 	void start_srd_session();
@@ -260,8 +257,6 @@ private:
 	atomic<bool> decode_interrupt_, logic_mux_interrupt_;
 
 	bool decode_paused_;
-
-	QString error_message_;
 };
 
 } // namespace data

@@ -28,8 +28,9 @@
 
 #include <QDebug>
 
-#include <pv/binding/decoder.hpp>
+#include <extdef.h>
 #include <pv/session.hpp>
+#include <pv/binding/decoder.hpp>
 
 using std::dynamic_pointer_cast;
 using std::make_shared;
@@ -40,6 +41,33 @@ using std::unique_lock;
 
 namespace pv {
 namespace data {
+
+const QColor SignalBase::AnalogSignalColors[8] =
+{
+	QColor(0xC4, 0xA0, 0x00),	// Yellow   HSV:  49 / 100 / 77
+	QColor(0x87, 0x20, 0x7A),	// Magenta  HSV: 308 /  70 / 53
+	QColor(0x20, 0x4A, 0x87),	// Blue     HSV: 216 /  76 / 53
+	QColor(0x4E, 0x9A, 0x06),	// Green    HSV:  91 /  96 / 60
+	QColor(0xBF, 0x6E, 0x00),	// Orange   HSV:  35 / 100 / 75
+	QColor(0x5E, 0x20, 0x80),	// Purple   HSV: 280 /  75 / 50
+	QColor(0x20, 0x80, 0x7A),	// Turqoise HSV: 177 /  75 / 50
+	QColor(0x80, 0x20, 0x24)	// Red      HSV: 358 /  75 / 50
+};
+
+const QColor SignalBase::LogicSignalColors[10] =
+{
+	QColor(0x16, 0x19, 0x1A),	// Black
+	QColor(0x8F, 0x52, 0x02),	// Brown
+	QColor(0xCC, 0x00, 0x00),	// Red
+	QColor(0xF5, 0x79, 0x00),	// Orange
+	QColor(0xED, 0xD4, 0x00),	// Yellow
+	QColor(0x73, 0xD2, 0x16),	// Green
+	QColor(0x34, 0x65, 0xA4),	// Blue
+	QColor(0x75, 0x50, 0x7B),	// Violet
+	QColor(0x88, 0x8A, 0x85),	// Grey
+	QColor(0xEE, 0xEE, 0xEC),	// White
+};
+
 
 const int SignalBase::ColorBGAlpha = 8 * 256 / 100;
 const uint64_t SignalBase::ConversionBlockSize = 4096;
@@ -95,7 +123,8 @@ SignalBase::SignalBase(shared_ptr<sigrok::Channel> channel, ChannelType channel_
 	group_(nullptr),
 	conversion_type_(NoConversion),
 	min_value_(0),
-	max_value_(0)
+	max_value_(0),
+	error_message_("")
 {
 	if (channel_) {
 		internal_name_ = QString::fromStdString(channel_->name());
@@ -106,6 +135,13 @@ SignalBase::SignalBase(shared_ptr<sigrok::Channel> channel, ChannelType channel_
 		this, SLOT(on_delayed_conversion_start()));
 	delayed_conversion_starter_.setSingleShot(true);
 	delayed_conversion_starter_.setInterval(ConversionDelay);
+
+	// Only logic and analog SR channels can have their colors auto-set
+	// because for them, we have an index that can be used
+	if (channel_type == LogicChannel)
+		set_color(LogicSignalColors[index() % countof(LogicSignalColors)]);
+	else if (channel_type == AnalogChannel)
+		set_color(AnalogSignalColors[index() % countof(AnalogSignalColors)]);
 }
 
 SignalBase::~SignalBase()
@@ -116,6 +152,12 @@ SignalBase::~SignalBase()
 shared_ptr<sigrok::Channel> SignalBase::channel() const
 {
 	return channel_;
+}
+
+bool SignalBase::is_generated() const
+{
+	// Only signals associated with a device have a corresponding sigrok channel
+	return channel_ == nullptr;
 }
 
 bool SignalBase::enabled() const
@@ -217,6 +259,11 @@ QColor SignalBase::bgcolor() const
 	return bgcolor_;
 }
 
+QString SignalBase::get_error_message() const
+{
+	return error_message_;
+}
+
 void SignalBase::set_data(shared_ptr<pv::data::SignalData> data)
 {
 	if (data_) {
@@ -225,13 +272,10 @@ void SignalBase::set_data(shared_ptr<pv::data::SignalData> data)
 		disconnect(data.get(), SIGNAL(samples_added(shared_ptr<Segment>, uint64_t, uint64_t)),
 			this, SLOT(on_samples_added(shared_ptr<Segment>, uint64_t, uint64_t)));
 
-		if (channel_type_ == AnalogChannel) {
-			shared_ptr<Analog> analog = analog_data();
-			assert(analog);
-
+		shared_ptr<Analog> analog = analog_data();
+		if (analog)
 			disconnect(analog.get(), SIGNAL(min_max_changed(float, float)),
 				this, SLOT(on_min_max_changed(float, float)));
-		}
 	}
 
 	data_ = data;
@@ -242,13 +286,10 @@ void SignalBase::set_data(shared_ptr<pv::data::SignalData> data)
 		connect(data.get(), SIGNAL(samples_added(SharedPtrToSegment, uint64_t, uint64_t)),
 			this, SLOT(on_samples_added(SharedPtrToSegment, uint64_t, uint64_t)));
 
-		if (channel_type_ == AnalogChannel) {
-			shared_ptr<Analog> analog = analog_data();
-			assert(analog);
-
+		shared_ptr<Analog> analog = analog_data();
+		if (analog)
 			connect(analog.get(), SIGNAL(min_max_changed(float, float)),
 				this, SLOT(on_min_max_changed(float, float)));
-		}
 	}
 }
 
@@ -263,20 +304,18 @@ void SignalBase::clear_sample_data()
 
 shared_ptr<data::Analog> SignalBase::analog_data() const
 {
-	shared_ptr<Analog> result = nullptr;
+	if (!data_)
+		return nullptr;
 
-	if (channel_type_ == AnalogChannel)
-		result = dynamic_pointer_cast<Analog>(data_);
-
-	return result;
+	return dynamic_pointer_cast<Analog>(data_);
 }
 
 shared_ptr<data::Logic> SignalBase::logic_data() const
 {
-	shared_ptr<Logic> result = nullptr;
+	if (!data_)
+		return nullptr;
 
-	if (channel_type_ == LogicChannel)
-		result = dynamic_pointer_cast<Logic>(data_);
+	shared_ptr<Logic> result = dynamic_pointer_cast<Logic>(data_);
 
 	if (((conversion_type_ == A2LConversionByThreshold) ||
 		(conversion_type_ == A2LConversionBySchmittTrigger)))
@@ -289,25 +328,25 @@ bool SignalBase::segment_is_complete(uint32_t segment_id) const
 {
 	bool result = true;
 
-	if (channel_type_ == AnalogChannel)
+	shared_ptr<Analog> adata = analog_data();
+	if (adata)
 	{
-		shared_ptr<Analog> data = dynamic_pointer_cast<Analog>(data_);
-		auto segments = data->analog_segments();
+		auto segments = adata->analog_segments();
 		try {
 			result = segments.at(segment_id)->is_complete();
 		} catch (out_of_range&) {
 			// Do nothing
 		}
-	}
-
-	if (channel_type_ == LogicChannel)
-	{
-		shared_ptr<Logic> data = dynamic_pointer_cast<Logic>(data_);
-		auto segments = data->logic_segments();
-		try {
-			result = segments.at(segment_id)->is_complete();
-		} catch (out_of_range&) {
-			// Do nothing
+	} else {
+		shared_ptr<Logic> ldata = logic_data();
+		if (ldata) {
+			shared_ptr<Logic> data = dynamic_pointer_cast<Logic>(data_);
+			auto segments = data->logic_segments();
+			try {
+				result = segments.at(segment_id)->is_complete();
+			} catch (out_of_range&) {
+				// Do nothing
+			}
 		}
 	}
 
@@ -318,21 +357,16 @@ bool SignalBase::has_samples() const
 {
 	bool result = false;
 
-	if (channel_type_ == AnalogChannel)
+	shared_ptr<Analog> adata = analog_data();
+	if (adata)
 	{
-		shared_ptr<Analog> data = dynamic_pointer_cast<Analog>(data_);
-		if (data) {
-			auto segments = data->analog_segments();
-			if ((segments.size() > 0) && (segments.front()->get_sample_count() > 0))
-				result = true;
-		}
-	}
-
-	if (channel_type_ == LogicChannel)
-	{
-		shared_ptr<Logic> data = dynamic_pointer_cast<Logic>(data_);
-		if (data) {
-			auto segments = data->logic_segments();
+		auto segments = adata->analog_segments();
+		if ((segments.size() > 0) && (segments.front()->get_sample_count() > 0))
+			result = true;
+	} else {
+		shared_ptr<Logic> ldata = logic_data();
+		if (ldata) {
+			auto segments = ldata->logic_segments();
 			if ((segments.size() > 0) && (segments.front()->get_sample_count() > 0))
 				result = true;
 		}
@@ -343,18 +377,13 @@ bool SignalBase::has_samples() const
 
 double SignalBase::get_samplerate() const
 {
-	if (channel_type_ == AnalogChannel)
-	{
-		shared_ptr<Analog> data = dynamic_pointer_cast<Analog>(data_);
-		if (data)
-			return data->get_samplerate();
-	}
-
-	if (channel_type_ == LogicChannel)
-	{
-		shared_ptr<Logic> data = dynamic_pointer_cast<Logic>(data_);
-		if (data)
-			return data->get_samplerate();
+	shared_ptr<Analog> adata = analog_data();
+	if (adata)
+		return adata->get_samplerate();
+	else {
+		shared_ptr<Logic> ldata = logic_data();
+		if (ldata)
+			return ldata->get_samplerate();
 	}
 
 	// Default samplerate is 1 Hz
@@ -580,23 +609,25 @@ void SignalBase::restore_settings(QSettings &settings)
 
 bool SignalBase::conversion_is_a2l() const
 {
-	return ((channel_type_ == AnalogChannel) &&
-		((conversion_type_ == A2LConversionByThreshold) ||
+	return (((conversion_type_ == A2LConversionByThreshold) ||
 		(conversion_type_ == A2LConversionBySchmittTrigger)));
 }
 
-void SignalBase::convert_single_segment_range(AnalogSegment *asegment,
-	LogicSegment *lsegment, uint64_t start_sample, uint64_t end_sample)
+void SignalBase::convert_single_segment_range(shared_ptr<AnalogSegment> asegment,
+	shared_ptr<LogicSegment> lsegment, uint64_t start_sample, uint64_t end_sample)
 {
 	if (end_sample > start_sample) {
 		tie(min_value_, max_value_) = asegment->get_min_max();
 
 		// Create sigrok::Analog instance
 		float *asamples = new float[ConversionBlockSize];
+		assert(asamples);
 		uint8_t *lsamples = new uint8_t[ConversionBlockSize];
+		assert(lsamples);
 
 		vector<shared_ptr<sigrok::Channel> > channels;
-		channels.push_back(channel_);
+		if (channel_)
+			channels.push_back(channel_);
 
 		vector<const sigrok::QuantityFlag*> mq_flags;
 		const sigrok::Quantity * const mq = sigrok::Quantity::VOLTAGE;
@@ -657,6 +688,7 @@ void SignalBase::convert_single_segment_range(AnalogSegment *asegment,
 
 				lsegment->append_payload(logic->data_pointer(), logic->data_length());
 				samples_added(lsegment->segment_id(), i, i + ConversionBlockSize);
+
 				i += ConversionBlockSize;
 			}
 
@@ -682,7 +714,8 @@ void SignalBase::convert_single_segment_range(AnalogSegment *asegment,
 	}
 }
 
-void SignalBase::convert_single_segment(AnalogSegment *asegment, LogicSegment *lsegment)
+void SignalBase::convert_single_segment(shared_ptr<AnalogSegment> asegment,
+	shared_ptr<LogicSegment> lsegment)
 {
 	uint64_t start_sample, end_sample, old_end_sample;
 	start_sample = end_sample = 0;
@@ -736,7 +769,7 @@ void SignalBase::conversion_thread_proc()
 
 	uint32_t segment_id = 0;
 
-	AnalogSegment *asegment = analog_data->analog_segments().front().get();
+	shared_ptr<AnalogSegment> asegment = analog_data->analog_segments().front();
 	assert(asegment);
 
 	const shared_ptr<Logic> logic_data = dynamic_pointer_cast<Logic>(converted_data_);
@@ -749,7 +782,7 @@ void SignalBase::conversion_thread_proc()
 		logic_data->push_segment(new_segment);
 	}
 
-	LogicSegment *lsegment = logic_data->logic_segments().front().get();
+	shared_ptr<LogicSegment> lsegment = logic_data->logic_segments().front();
 	assert(lsegment);
 
 	do {
@@ -758,11 +791,12 @@ void SignalBase::conversion_thread_proc()
 		// Only advance to next segment if the current input segment is complete
 		if (asegment->is_complete() &&
 			analog_data->analog_segments().size() > logic_data->logic_segments().size()) {
+
 			// There are more segments to process
 			segment_id++;
 
 			try {
-				asegment = analog_data->analog_segments().at(segment_id).get();
+				asegment = analog_data->analog_segments().at(segment_id);
 			} catch (out_of_range&) {
 				qDebug() << "Conversion error for" << name() << ": no analog segment" \
 					<< segment_id << ", segments size is" << analog_data->analog_segments().size();
@@ -773,13 +807,13 @@ void SignalBase::conversion_thread_proc()
 				*logic_data.get(), segment_id, 1, asegment->samplerate());
 			logic_data->push_segment(new_segment);
 
-			lsegment = logic_data->logic_segments().back().get();
-		} else {
-			// No more samples/segments to process, wait for data or interrupt
-			if (!conversion_interrupt_) {
-				unique_lock<mutex> input_lock(conversion_input_mutex_);
-				conversion_input_cond_.wait(input_lock);
-			}
+			lsegment = logic_data->logic_segments().back();
+		}
+
+		// No more samples/segments to process, wait for data or interrupt
+		if (!conversion_interrupt_) {
+			unique_lock<mutex> input_lock(conversion_input_mutex_);
+			conversion_input_cond_.wait(input_lock);
 		}
 	} while (!conversion_interrupt_);
 }
@@ -795,11 +829,20 @@ void SignalBase::start_conversion(bool delayed_start)
 
 	if (converted_data_)
 		converted_data_->clear();
+
 	samples_cleared();
 
 	conversion_interrupt_ = false;
-	conversion_thread_ = std::thread(
-		&SignalBase::conversion_thread_proc, this);
+	conversion_thread_ = std::thread(&SignalBase::conversion_thread_proc, this);
+}
+
+void SignalBase::set_error_message(QString msg)
+{
+	error_message_ = msg;
+	// TODO Emulate noquote()
+	qDebug().nospace() << name() << ": " << msg;
+
+	error_message_changed(msg);
 }
 
 void SignalBase::stop_conversion()

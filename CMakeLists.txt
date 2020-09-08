@@ -21,9 +21,9 @@
 
 cmake_minimum_required(VERSION 2.8.12)
 
-include(GNUInstallDirs)
+project(pulseview C CXX)
 
-project(pulseview)
+include(GNUInstallDirs)
 
 # Let AUTOMOC and AUTOUIC process GENERATED files.
 if(POLICY CMP0071)
@@ -258,6 +258,7 @@ set(pulseview_SOURCES
 	pv/data/analogsegment.cpp
 	pv/data/logic.cpp
 	pv/data/logicsegment.cpp
+	pv/data/mathsignal.cpp
 	pv/data/signalbase.cpp
 	pv/data/signaldata.cpp
 	pv/data/segment.cpp
@@ -285,6 +286,7 @@ set(pulseview_SOURCES
 	pv/views/trace/cursorpair.cpp
 	pv/views/trace/flag.cpp
 	pv/views/trace/header.cpp
+	pv/views/trace/mathsignal.cpp
 	pv/views/trace/marginwidget.cpp
 	pv/views/trace/logicsignal.cpp
 	pv/views/trace/ruler.cpp
@@ -320,6 +322,7 @@ set(pulseview_SOURCES
 
 # This list includes only QObject derived class headers.
 set(pulseview_HEADERS
+	pv/exprtk.hpp
 	pv/logging.hpp
 	pv/globalsettings.hpp
 	pv/mainwindow.hpp
@@ -331,6 +334,7 @@ set(pulseview_HEADERS
 	pv/data/analogsegment.hpp
 	pv/data/logic.hpp
 	pv/data/logicsegment.hpp
+	pv/data/mathsignal.hpp
 	pv/data/signalbase.hpp
 	pv/dialogs/connect.hpp
 	pv/dialogs/inputoutputoptions.hpp
@@ -351,6 +355,7 @@ set(pulseview_HEADERS
 	pv/views/trace/flag.hpp
 	pv/views/trace/header.hpp
 	pv/views/trace/logicsignal.hpp
+	pv/views/trace/mathsignal.hpp
 	pv/views/trace/marginwidget.hpp
 	pv/views/trace/ruler.hpp
 	pv/views/trace/signal.hpp
